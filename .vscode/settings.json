@@ -1,0 +1,5 @@
+{
+  "css.validate": false,
+  "files.associations": { "*.css": "tailwindcss" },
+  "tailwindCSS.emmetCompletions": true
+}

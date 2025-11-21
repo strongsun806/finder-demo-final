@@ -1,0 +1,81 @@
+/* src/styles/index.css */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -----------------------------
+   기본 베이스 스타일
+------------------------------ */
+
+@layer base {
+  :root {
+    --border: #e5e7eb;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-900 antialiased;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+/* -----------------------------
+   공통 컴포넌트 스타일
+------------------------------ */
+
+@layer components {
+  /* 카드 */
+  .card {
+    @apply rounded-2xl border bg-white shadow-soft;
+    border-color: var(--border);
+  }
+
+  .card-header {
+    @apply flex items-center justify-between mb-3;
+  }
+
+  .card-title {
+    @apply text-sm font-semibold;
+  }
+
+  .card-subtitle {
+    @apply text-[11px] text-slate-500;
+  }
+
+  /* 작은 뱃지 */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium;
+  }
+
+  .badge-green {
+    @apply badge bg-emerald-50 text-emerald-700;
+  }
+
+  .badge-amber {
+    @apply badge bg-amber-50 text-amber-700;
+  }
+
+  .badge-red {
+    @apply badge bg-red-50 text-red-700;
+  }
+}
+
+/* -----------------------------
+   유틸리티 (커스텀 클래스)
+------------------------------ */
+
+@layer utilities {
+  /* 부드러운 그림자 */
+  .shadow-soft {
+    /* 원하면 값 바꿔도 됨 */
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  }
+
+  /* 링크 스타일 (예전 text-brand-600 대체) */
+  .link {
+    @apply text-sky-600 hover:text-sky-700 underline underline-offset-2;
+  }
+}

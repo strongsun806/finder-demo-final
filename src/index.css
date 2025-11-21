@@ -1,0 +1,9 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+:root { --border: #e5e7eb; }
+* { box-sizing: border-box; }
+body { @apply bg-slate-50; }
