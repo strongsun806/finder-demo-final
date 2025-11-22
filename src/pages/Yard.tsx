@@ -17,6 +17,9 @@ export default function Yard() {
   const [selectedIncident, setSelectedIncident] =
     useState<Incident | null>(null);
 
+  // 상세 팝업 on/off
+  const [openDetailModal, setOpenDetailModal] = useState(false);
+
   // 사고 등록 모달
   const [openModal, setOpenModal] = useState(false);
   const [formTitle, setFormTitle] = useState("");
@@ -55,7 +58,14 @@ export default function Yard() {
 
     if (selectedIncident && selectedIncident.id === id) {
       setSelectedIncident(null);
+      setOpenDetailModal(false);
     }
+  };
+
+  // 리스트/지도에서 사고 선택 시 공통 동작
+  const selectAndOpenDetail = (incident: Incident) => {
+    setSelectedIncident(incident);
+    setOpenDetailModal(true); // 팝업 열기
   };
 
   return (
@@ -128,7 +138,7 @@ export default function Yard() {
                         <button
                           type="button"
                           className="text-sky-600 hover:underline text-left"
-                          onClick={() => setSelectedIncident(i)}
+                          onClick={() => selectAndOpenDetail(i)}
                         >
                           {i.title}
                         </button>
@@ -178,7 +188,7 @@ export default function Yard() {
               실시간 야드 지도
             </h2>
             <div className="text-[11px] text-slate-500">
-              * 마커 클릭 시 해당 사고 상세가 아래에 표시됩니다.
+              * 마커 클릭 시 사고 상세 팝업과 하단 상세가 함께 표시됩니다.
             </div>
           </div>
 
@@ -186,7 +196,7 @@ export default function Yard() {
             <Yardmap
               incidents={incidents}
               onSelectIncident={(incident) =>
-                setSelectedIncident(incident)
+                selectAndOpenDetail(incident)
               }
             />
           </div>
@@ -225,9 +235,17 @@ export default function Yard() {
         </div>
       )}
 
+      {/* 사고 상세 팝업 모달 */}
+      {openDetailModal && selectedIncident && (
+        <IncidentDetailModal
+          incident={selectedIncident}
+          onClose={() => setOpenDetailModal(false)}
+        />
+      )}
+
       {/* 사고 등록 모달 */}
       {openModal && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-semibold">
@@ -279,8 +297,7 @@ export default function Yard() {
                     value={formSeverity}
                     onChange={(e) =>
                       setFormSeverity(
-                        e.target
-                          .value as IncidentSeverity
+                        e.target.value as IncidentSeverity
                       )
                     }
                     className="w-full h-8 rounded-md border border-slate-300 px-2 text-[12px]"
@@ -365,5 +382,69 @@ function SeverityBadge({
     >
       경미
     </span>
+  );
+}
+
+/* ─── 사고 상세 팝업 모달 ─── */
+
+function IncidentDetailModal({
+  incident,
+  onClose,
+}: {
+  incident: Incident;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/45">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-xl p-5 relative">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm"
+        >
+          닫기
+        </button>
+
+        <div className="space-y-3 text-[13px] text-slate-700">
+          <div className="flex items-center gap-2">
+            <SeverityBadge severity={incident.severity} />
+            <h2 className="text-sm font-semibold">
+              {incident.title}
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-4 text-[12px]">
+            <div className="text-slate-500">위치</div>
+            <div>{incident.location}</div>
+
+            <div className="text-slate-500">발생 시간</div>
+            <div>{incident.time}</div>
+
+            <div className="text-slate-500">상태</div>
+            <div>{incident.status}</div>
+          </div>
+
+          <div className="mt-3 border-t border-slate-200 pt-3">
+            <div className="text-slate-500 text-[12px] mb-1">
+              상세 내용
+            </div>
+            <div className="text-[13px] whitespace-pre-wrap leading-relaxed">
+              {incident.description ||
+                "상세 내용이 입력되지 않았습니다."}
+            </div>
+          </div>
+
+          <div className="pt-3 flex justify-end">
+            <button
+              type="button"
+              className="px-5 py-1.5 bg-sky-600 text-white rounded-md text-[12px] hover:bg-sky-700"
+              onClick={onClose}
+            >
+              확인
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
