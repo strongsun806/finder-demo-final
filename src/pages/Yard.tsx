@@ -1,5 +1,5 @@
 // src/pages/Yard.tsx
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   useMainStore,
   Incident,
@@ -7,6 +7,76 @@ import {
   IncidentStatus,
 } from "../store/mainstore";
 import Yardmap from "../components/Yardmap";
+
+/* ─── 야드 위험도 타입 & 계산 함수 ─── */
+
+type YardRiskLevel = "LOW" | "MEDIUM" | "HIGH";
+
+type YardRisk = {
+  score: number;
+  level: YardRiskLevel;
+  incidentCount: number;
+};
+
+function computeYardRiskMap(
+  incidents: Incident[]
+): Map<string, YardRisk> {
+  const map = new Map<string, YardRisk>();
+  const now = Date.now();
+
+  const severityScore: Record<IncidentSeverity, number> = {
+    경미: 20,
+    보통: 40,
+    중대: 70,
+  };
+
+  const statusWeight: Record<IncidentStatus, number> = {
+    진행중: 1.2,
+    조치완료: 0.6,
+  };
+
+  for (const inc of incidents) {
+    const loc = (inc.location || "기타").trim();
+    const areaKey =
+      loc.length > 0 ? loc.charAt(0).toUpperCase() : "기타";
+
+    const base = severityScore[inc.severity] ?? 30;
+    const weight = statusWeight[inc.status] ?? 1.0;
+
+    // 시간 감쇠 (파싱 실패 시 감쇠 X)
+    let timeDecay = 1.0;
+    if (inc.time) {
+      const parsed = Date.parse(inc.time);
+      if (!Number.isNaN(parsed)) {
+        const hours = (now - parsed) / 36e5; // ms → 시간
+        if (hours > 24 && hours <= 72) timeDecay = 0.8;
+        else if (hours > 72 && hours <= 168) timeDecay = 0.6;
+        else if (hours > 168) timeDecay = 0.4;
+      }
+    }
+
+    const addScore = base * weight * timeDecay;
+
+    const prev = map.get(areaKey);
+    const prevScore = prev?.score ?? 0;
+    const prevCount = prev?.incidentCount ?? 0;
+
+    const newScore = Math.min(100, prevScore + addScore);
+
+    let level: YardRiskLevel;
+    if (newScore >= 70) level = "HIGH";
+    else if (newScore >= 40) level = "MEDIUM";
+    else level = "LOW";
+
+    map.set(areaKey, {
+      score: newScore,
+      level,
+      incidentCount: prevCount + 1,
+    });
+  }
+
+  return map;
+}
 
 export default function Yard() {
   const incidents = useMainStore((s) => s.incidents);
@@ -27,6 +97,27 @@ export default function Yard() {
   const [formSeverity, setFormSeverity] =
     useState<IncidentSeverity>("보통");
   const [formDescription, setFormDescription] = useState("");
+
+  // 위험도 분석 "마지막 계산 시각" (알고리즘 티용)
+  const [lastRiskCalcAt, setLastRiskCalcAt] =
+    useState<string | null>(null);
+
+  // 🔍 incidents → 구역별 위험도 분석
+  const yardRiskMap = useMemo(
+    () => computeYardRiskMap(incidents),
+    [incidents]
+  );
+
+  const yardRiskList = useMemo(
+    () =>
+      Array.from(yardRiskMap.entries())
+        .map(([area, data]) => ({
+          area,
+          ...data,
+        }))
+        .sort((a, b) => b.score - a.score),
+    [yardRiskMap]
+  );
 
   const resetForm = () => {
     setFormTitle("");
@@ -68,6 +159,18 @@ export default function Yard() {
     setOpenDetailModal(true); // 팝업 열기
   };
 
+  // "위험도 재계산" 버튼 (실제 점수는 incidents에 따라 항상 자동 반영 + 시각만 갱신)
+  const handleRiskRecalc = () => {
+    const now = new Date();
+    const label = now.toLocaleString("ko-KR", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    setLastRiskCalcAt(label);
+  };
+
   return (
     <div className="space-y-6">
       {/* 타이틀 */}
@@ -91,6 +194,107 @@ export default function Yard() {
         </button>
       </div>
 
+      {/* 🔎 알고리즘 티나는: 야드 위험도 분석 카드 */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">
+              야드 위험도 분석 (알고리즘)
+            </h2>
+            <p className="text-[11px] text-slate-500 mt-1">
+              사고 심각도·처리 상태·발생 시점을 반영해 구역별 위험도
+              점수(0~100)와 레벨(LOW / MEDIUM / HIGH)을 계산합니다.
+            </p>
+          </div>
+          <div className="text-right space-y-1">
+            <button
+              type="button"
+              onClick={handleRiskRecalc}
+              className="inline-flex items-center px-3 py-1.5 rounded-full bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800"
+            >
+              위험도 재계산 (알고리즘 실행)
+            </button>
+            <div className="text-[10px] text-slate-400">
+              {lastRiskCalcAt
+                ? `마지막 수동 분석: ${lastRiskCalcAt}`
+                : "아직 수동 분석 이력이 없습니다."}
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          {yardRiskList.length === 0 ? (
+            <div className="py-4 text-[11px] text-slate-400">
+              등록된 사고가 없어 모든 구역의 위험도는 0점(LOW)으로
+              간주됩니다.
+            </div>
+          ) : (
+            <table className="min-w-[420px] text-[11px]">
+              <thead className="bg-slate-50 border border-slate-200">
+                <tr className="text-slate-500">
+                  <th className="py-2 px-3 text-left w-16">
+                    구역
+                  </th>
+                  <th className="py-2 px-3 text-left w-32">
+                    위험도 점수 (0~100)
+                  </th>
+                  <th className="py-2 px-3 text-left w-32">
+                    레벨
+                  </th>
+                  <th className="py-2 px-3 text-left w-24">
+                    사고 건수
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {yardRiskList.map((r, idx) => (
+                  <tr
+                    key={r.area}
+                    className={
+                      idx % 2 === 0
+                        ? "bg-white border-x border-b border-slate-200"
+                        : "bg-slate-50/60 border-x border-b border-slate-200"
+                    }
+                  >
+                    <td className="py-2 px-3 font-semibold text-slate-800">
+                      {r.area}
+                    </td>
+                    <td className="py-2 px-3 text-slate-800">
+                      {Math.round(r.score)} / 100
+                    </td>
+                    <td className="py-2 px-3">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] ${
+                          r.level === "HIGH"
+                            ? "bg-rose-50 text-rose-600 border-rose-200"
+                            : r.level === "MEDIUM"
+                            ? "bg-amber-50 text-amber-600 border-amber-200"
+                            : "bg-emerald-50 text-emerald-600 border-emerald-200"
+                        }`}
+                      >
+                        {r.level}{" "}
+                        <span className="ml-1 text-[10px] text-slate-400">
+                          (
+                          {r.level === "HIGH"
+                            ? "위험도 높음"
+                            : r.level === "MEDIUM"
+                            ? "보통"
+                            : "낮음"}
+                          )
+                        </span>
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-slate-700">
+                      {r.incidentCount}건
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
       {/* 상단: 리스트 + 지도 */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(360px,420px)_1fr] gap-4">
         {/* 좌측: 사고 리스트 */}
@@ -107,18 +311,26 @@ export default function Yard() {
           <div className="flex-1 overflow-y-auto text-[12px]">
             {incidents.length === 0 ? (
               <div className="h-full flex items-center justify-center text-slate-400 text-[11px]">
-                등록된 사고가 없습니다. 상단 &quot;사고 등록&quot; 버튼으로
-                새로운 사고를 입력하세요.
+                등록된 사고가 없습니다. 상단 &quot;사고 등록&quot;
+                버튼으로 새로운 사고를 입력하세요.
               </div>
             ) : (
               <table className="w-full">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr className="text-[11px] text-slate-500">
-                    <th className="py-2 px-3 text-left w-16">심각도</th>
+                    <th className="py-2 px-3 text-left w-16">
+                      심각도
+                    </th>
                     <th className="py-2 px-3 text-left">제목</th>
-                    <th className="py-2 px-3 text-center w-16">위치</th>
-                    <th className="py-2 px-3 text-center w-24">상태</th>
-                    <th className="py-2 px-3 text-center w-16">삭제</th>
+                    <th className="py-2 px-3 text-center w-16">
+                      위치
+                    </th>
+                    <th className="py-2 px-3 text-center w-24">
+                      상태
+                    </th>
+                    <th className="py-2 px-3 text-center w-16">
+                      삭제
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="text-[12px] text-slate-700">
@@ -155,7 +367,8 @@ export default function Yard() {
                           onChange={(e) =>
                             updateIncidentStatus(
                               i.id,
-                              e.target.value as IncidentStatus
+                              e.target
+                                .value as IncidentStatus
                             )
                           }
                           className="border border-slate-300 rounded-full px-2 py-0.5 text-[11px]"
@@ -188,7 +401,8 @@ export default function Yard() {
               실시간 야드 지도
             </h2>
             <div className="text-[11px] text-slate-500">
-              * 마커 클릭 시 사고 상세 팝업과 하단 상세가 함께 표시됩니다.
+              * 마커 클릭 시 사고 상세 팝업과 하단 상세가 함께
+              표시됩니다.
             </div>
           </div>
 
@@ -297,7 +511,8 @@ export default function Yard() {
                     value={formSeverity}
                     onChange={(e) =>
                       setFormSeverity(
-                        e.target.value as IncidentSeverity
+                        e.target
+                          .value as IncidentSeverity
                       )
                     }
                     className="w-full h-8 rounded-md border border-slate-300 px-2 text-[12px]"

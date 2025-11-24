@@ -1,10 +1,82 @@
 // src/pages/Containers.tsx
-import React, { useState, ChangeEvent } from "react";
+import React, { useState, useMemo, ChangeEvent } from "react";
 import {
   useMainStore,
   ContainerItem,
   ContainerStatus,
+  Incident,
+  IncidentSeverity,
+  IncidentStatus,
 } from "../store/mainstore";
+
+/* ───── 야드 위험도 타입 & 계산 함수 (Yard와 동일 로직) ───── */
+
+type YardRiskLevel = "LOW" | "MEDIUM" | "HIGH";
+
+type YardRisk = {
+  score: number;
+  level: YardRiskLevel;
+  incidentCount: number;
+};
+
+function computeYardRiskMap(
+  incidents: Incident[]
+): Map<string, YardRisk> {
+  const map = new Map<string, YardRisk>();
+  const now = Date.now();
+
+  const severityScore: Record<IncidentSeverity, number> = {
+    경미: 20,
+    보통: 40,
+    중대: 70,
+  };
+
+  const statusWeight: Record<IncidentStatus, number> = {
+    진행중: 1.2,
+    조치완료: 0.6,
+  };
+
+  for (const inc of incidents) {
+    const loc = (inc.location || "기타").trim();
+    const areaKey =
+      loc.length > 0 ? loc.charAt(0).toUpperCase() : "기타";
+
+    const base = severityScore[inc.severity] ?? 30;
+    const weight = statusWeight[inc.status] ?? 1.0;
+
+    let timeDecay = 1.0;
+    if (inc.time) {
+      const parsed = Date.parse(inc.time);
+      if (!Number.isNaN(parsed)) {
+        const hours = (now - parsed) / 36e5;
+        if (hours > 24 && hours <= 72) timeDecay = 0.8;
+        else if (hours > 72 && hours <= 168) timeDecay = 0.6;
+        else if (hours > 168) timeDecay = 0.4;
+      }
+    }
+
+    const addScore = base * weight * timeDecay;
+
+    const prev = map.get(areaKey);
+    const prevScore = prev?.score ?? 0;
+    const prevCount = prev?.incidentCount ?? 0;
+
+    const newScore = Math.min(100, prevScore + addScore);
+
+    let level: YardRiskLevel;
+    if (newScore >= 70) level = "HIGH";
+    else if (newScore >= 40) level = "MEDIUM";
+    else level = "LOW";
+
+    map.set(areaKey, {
+      score: newScore,
+      level,
+      incidentCount: prevCount + 1,
+    });
+  }
+
+  return map;
+}
 
 /* ───── 필터 상태 타입 ───── */
 
@@ -23,9 +95,10 @@ const initialFilter: FilterState = {
 };
 
 export default function ContainersPage() {
-  // ✅ 컨테이너는 이제 zustand store에서 가져옴
+  // ✅ 컨테이너 & 사고는 zustand store에서 가져옴
   const containers = useMainStore((s) => s.containers);
   const addContainer = useMainStore((s) => s.addContainer);
+  const incidents = useMainStore((s) => s.incidents);
 
   const [filters, setFilters] =
     useState<FilterState>(initialFilter);
@@ -51,8 +124,7 @@ export default function ContainersPage() {
     imageUrl: null,
   });
 
-  /* ─── 필터 적용 ─── */
-
+  // 🔍 컨테이너 조회 필터
   const filteredContainers = containers.filter((c) => {
     if (filters.area && !c.area.includes(filters.area)) return false;
     if (filters.year && !c.year.includes(filters.year)) return false;
@@ -69,6 +141,12 @@ export default function ContainersPage() {
   };
 
   const clearFilters = () => setFilters(initialFilter);
+
+  // 🔍 incidents → 구역별 위험도 분석 (ETA 계산에 활용)
+  const yardRiskMap = useMemo(
+    () => computeYardRiskMap(incidents),
+    [incidents]
+  );
 
   /* ─── 등록 모달: 입력 핸들러 ─── */
 
@@ -104,7 +182,6 @@ export default function ContainersPage() {
       return;
     }
 
-    // ✅ id는 현재 store에 있는 것 중 max + 1
     const nextId =
       containers.reduce(
         (max, c) => (c.id > max ? c.id : max),
@@ -119,7 +196,6 @@ export default function ContainersPage() {
         new Date().getFullYear().toString(),
     };
 
-    // ✅ store에 추가 (이제 새로고침해도 유지)
     addContainer(newItem);
 
     setCreateOpen(false);
@@ -141,6 +217,52 @@ export default function ContainersPage() {
     });
 
     alert("컨테이너가 등록되었습니다.");
+  };
+
+  // 📌 컨테이너별 ETA (알고리즘) 계산
+  const getEtaForContainer = (c: ContainerItem) => {
+    const baseMinutes = 40; // 기본 처리 시간
+    const statusExtra: Record<ContainerStatus, number> = {
+      입고: 10,
+      반출대기: 20,
+      반출완료: 0,
+    };
+
+    const risk = yardRiskMap.get(
+      (c.area || "").trim().charAt(0).toUpperCase() ||
+        "기타"
+    );
+
+    let riskDelay = 5;
+    let riskLabel = "위험도 정보 없음";
+
+    if (risk) {
+      if (risk.level === "HIGH") riskDelay = 20;
+      else if (risk.level === "MEDIUM") riskDelay = 10;
+      else riskDelay = 0;
+
+      riskLabel = `구역 ${c.area} · ${risk.level} (${Math.round(
+        risk.score
+      )}점)`;
+    }
+
+    const statusDelay = statusExtra[c.status] ?? 0;
+
+    const totalMin = baseMinutes + statusDelay + riskDelay;
+
+    const etaDate = new Date(
+      Date.now() + totalMin * 60 * 1000
+    );
+    const etaLabel = etaDate
+      .toTimeString()
+      .slice(0, 5); // HH:MM
+
+    return {
+      etaLabel,
+      explanation: `${riskLabel} · 상태: ${
+        c.status
+      } · 총 ${totalMin}분 기준`,
+    };
   };
 
   return (
@@ -280,72 +402,108 @@ export default function ContainersPage() {
                   출항일(출항시간)
                 </th>
                 <th className="px-3 text-left font-medium">
+                  예상 처리 완료시간(알고리즘)
+                </th>
+                <th className="px-3 text-left font-medium">
                   B/L / D/O
                 </th>
-                <th className="px-3 text-left font-medium">상태</th>
+                <th className="px-3 text-left font-medium">
+                  상태
+                </th>
                 <th className="px-3 text-left font-medium">
                   컨테이너 이미지
                 </th>
-                <th className="px-3 text-left font-medium">상세</th>
+                <th className="px-3 text-left font-medium">
+                  상세
+                </th>
               </tr>
             </thead>
             <tbody>
-              {filteredContainers.map((c, idx) => (
-                <tr
-                  key={c.id}
-                  className={[
-                    "h-9 border-b border-table-border/70 text-[11px]",
-                    idx % 2 === 0 ? "bg-white" : "bg-slate-50/40",
-                  ].join(" ")}
-                >
-                  <td className="px-3 text-slate-800">{c.area}</td>
-                  <td className="px-3 text-slate-800">{c.lane}</td>
-                  <td className="px-3 text-slate-800">{c.year}</td>
-                  <td className="px-3 text-slate-800">{c.name}</td>
-                  <td className="px-3 text-slate-700">{c.line}</td>
-                  <td className="px-3 text-slate-700">{c.nation}</td>
-                  <td className="px-3 text-slate-700">{c.type}</td>
-                  <td className="px-3 text-right text-slate-700">
-                    {c.quantity.toLocaleString()}
-                  </td>
-                  <td className="px-3 text-slate-600">
-                    {c.regDate}
-                  </td>
-                  <td className="px-3 text-slate-600">
-                    {c.departDate}
-                  </td>
-                  <td className="px-3 text-slate-700">{c.bldo}</td>
-                  <td className="px-3">
-                    <StatusBadge status={c.status} />
-                  </td>
-                  <td className="px-3">
-                    {c.imageUrl ? (
-                      <img
-                        src={c.imageUrl}
-                        alt={c.name}
-                        className="w-10 h-6 rounded object-cover border border-table-border/70"
-                      />
-                    ) : (
-                      <span className="text-[10px] text-slate-400">
-                        없음
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3">
-                    <button
-                      type="button"
-                      onClick={() => setDetailTarget(c)}
-                      className="px-3 py-[5px] rounded-full text-[11px] bg-white border border-table-border text-slate-700 hover:bg-slate-50"
-                    >
-                      보기
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filteredContainers.map((c, idx) => {
+                const { etaLabel, explanation } =
+                  getEtaForContainer(c);
+
+                return (
+                  <tr
+                    key={c.id}
+                    className={[
+                      "h-9 border-b border-table-border/70 text-[11px]",
+                      idx % 2 === 0
+                        ? "bg-white"
+                        : "bg-slate-50/40",
+                    ].join(" ")}
+                  >
+                    <td className="px-3 text-slate-800">
+                      {c.area}
+                    </td>
+                    <td className="px-3 text-slate-800">
+                      {c.lane}
+                    </td>
+                    <td className="px-3 text-slate-800">
+                      {c.year}
+                    </td>
+                    <td className="px-3 text-slate-800">
+                      {c.name}
+                    </td>
+                    <td className="px-3 text-slate-700">
+                      {c.line}
+                    </td>
+                    <td className="px-3 text-slate-700">
+                      {c.nation}
+                    </td>
+                    <td className="px-3 text-slate-700">
+                      {c.type}
+                    </td>
+                    <td className="px-3 text-right text-slate-700">
+                      {c.quantity.toLocaleString()}
+                    </td>
+                    <td className="px-3 text-slate-600">
+                      {c.regDate}
+                    </td>
+                    <td className="px-3 text-slate-600">
+                      {c.departDate}
+                    </td>
+                    <td className="px-3 text-slate-700">
+                      <div>{etaLabel}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        {explanation}
+                      </div>
+                    </td>
+                    <td className="px-3 text-slate-700">
+                      {c.bldo}
+                    </td>
+                    <td className="px-3">
+                      <StatusBadge status={c.status} />
+                    </td>
+                    <td className="px-3">
+                      {c.imageUrl ? (
+                        <img
+                          src={c.imageUrl}
+                          alt={c.name}
+                          className="w-10 h-6 rounded object-cover border border-table-border/70"
+                        />
+                      ) : (
+                        <span className="text-[10px] text-slate-400">
+                          없음
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3">
+                      <button
+                        type="button"
+                        onClick={() => setDetailTarget(c)}
+                        className="px-3 py-[5px] rounded-full text-[11px] bg-white border border-table-border text-slate-700 hover:bg-slate-50"
+                      >
+                        보기
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
               {filteredContainers.length === 0 && (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={15}
                     className="px-4 py-6 text-center text-[11px] text-slate-400"
                   >
                     조회 조건에 해당하는 컨테이너가 없습니다.
@@ -474,7 +632,8 @@ function ContainerDetailModal({
                 <div className="text-[11px] text-slate-400 text-center">
                   등록된 컨테이너 이미지가 없습니다.
                   <br />
-                  (등록 화면에서 이미지를 첨부하면 이 영역에 표시됩니다.)
+                  (등록 화면에서 이미지를 첨부하면 이 영역에
+                  표시됩니다.)
                 </div>
               )}
             </div>
@@ -521,7 +680,10 @@ function ContainerCreateModal({
   onSubmit,
 }: {
   draft: ContainerItem;
-  onChangeField: (field: keyof ContainerItem, value: string) => void;
+  onChangeField: (
+    field: keyof ContainerItem,
+    value: string
+  ) => void;
   onChangeImage: (e: ChangeEvent<HTMLInputElement>) => void;
   onClose: () => void;
   onSubmit: () => void;
@@ -615,7 +777,9 @@ function ContainerCreateModal({
 
             {/* 상태 셀렉트 */}
             <div className="space-y-1">
-              <div className="text-[11px] text-slate-500">상태</div>
+              <div className="text-[11px] text-slate-500">
+                상태
+              </div>
               <select
                 className="w-full h-8 rounded-lg border border-table-border bg-white px-3 text-[11px] text-slate-700 outline-none focus:ring-1 focus:ring-sky-500"
                 value={draft.status}
@@ -667,8 +831,8 @@ function ContainerCreateModal({
                   />
                 ) : (
                   <div className="text-[11px] text-slate-400 text-center">
-                    이미지 파일을 선택하면 이 영역에서 미리보기로
-                    표시됩니다.
+                    이미지 파일을 선택하면 이 영역에서
+                    미리보기로 표시됩니다.
                   </div>
                 )}
               </div>
